@@ -71,7 +71,7 @@ class ChangeSizeCalculation: WindowCalculation {
             resizedWindowRect.origin.y = params.window.rect.origin.y - floor(sizeOffset / 2.0)
         }
         
-        if resizedWindowRectIsTooSmall(windowRect: resizedWindowRect, visibleFrameOfScreen: visibleFrameOfScreen) {
+        if params.action == .smaller, resizedWindowRectIsTooSmall(windowRect: resizedWindowRect, visibleFrameOfScreen: visibleFrameOfScreen) {
             resizedWindowRect = window.rect
         }
         return RectResult(resizedWindowRect)

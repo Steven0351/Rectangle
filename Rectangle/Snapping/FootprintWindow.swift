@@ -9,8 +9,7 @@
 import Cocoa
 
 class FootprintWindow: NSWindow {
-    
-    private var closeWorkItem: DispatchWorkItem?
+    private var orderOutCanceled = false
     
     init() {
         let initialRect = NSRect(x: 0, y: 0, width: 0, height: 0)
@@ -37,7 +36,6 @@ class FootprintWindow: NSWindow {
         let boxView = NSBox()
         boxView.boxType = .custom
         boxView.borderColor = .lightGray
-        boxView.borderType = .lineBorder
         boxView.borderWidth = CGFloat(Defaults.footprintBorderWidth.value)
         
         if #available(macOS 11.0, *) {
@@ -51,27 +49,44 @@ class FootprintWindow: NSWindow {
         contentView = boxView
     }
     
-    override func makeKeyAndOrderFront(_ sender: Any?) {
+    override var isVisible: Bool {
+        // Workaround for footprint getting pushed off of Stage Manager
+        if StageUtil.stageCapable && StageUtil.stageEnabled && StageUtil.stageStripShow {
+            return true
+        }
+        return realIsVisible
+    }
+    
+    var realIsVisible: Bool {
         if Defaults.footprintFade.userDisabled {
-            super.makeKeyAndOrderFront(sender)
+            return super.isVisible
         } else {
-            closeWorkItem?.cancel()
-            closeWorkItem = nil
-            animator().alphaValue = CGFloat(Defaults.footprintAlpha.value)
-            super.makeKeyAndOrderFront(sender)
+            return alphaValue == Defaults.footprintAlpha.cgFloat
         }
     }
     
-    override func close() {
+    override func orderFront(_ sender: Any?) {
         if Defaults.footprintFade.userDisabled {
-            super.close()
+            super.orderFront(sender)
         } else {
-            animator().alphaValue = 0.0
-            let closeWorkItem = DispatchWorkItem {
-                super.close()
+            orderOutCanceled = true
+            super.orderFront(sender)
+            animator().alphaValue = Defaults.footprintAlpha.cgFloat
+        }
+    }
+    
+    override func orderOut(_ sender: Any?) {
+        if Defaults.footprintFade.userDisabled {
+            super.orderOut(nil)
+        } else {
+            orderOutCanceled = false
+            NSAnimationContext.runAnimationGroup { changes in
+                animator().alphaValue = 0.0
+            } completionHandler: {
+                if !self.orderOutCanceled {
+                    super.orderOut(nil)
+                }
             }
-            self.closeWorkItem = closeWorkItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: closeWorkItem)
         }
     }
 }

@@ -19,12 +19,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let accessibilityAuthorization = AccessibilityAuthorization()
     private let statusItem = RectangleStatusItem.instance
     static let windowHistory = WindowHistory()
-    
+    static let updaterController = SPUStandardUpdaterController(updaterDelegate: nil, userDriverDelegate: nil)
+
     private var shortcutManager: ShortcutManager!
     private var windowManager: WindowManager!
     private var applicationToggle: ApplicationToggle!
     private var windowCalculationFactory: WindowCalculationFactory!
     private var snappingManager: SnappingManager!
+    private var titleBarManager: TitleBarManager!
     
     private var prefsWindowController: NSWindowController?
     
@@ -35,10 +37,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @IBOutlet weak var quitMenuItem: NSMenuItem!
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        Defaults.loadFromSupportDir()
         if let lastVersion = Defaults.lastVersion.value,
            let intLastVersion = Int(lastVersion) {
             if intLastVersion < 46 {
                 MASShortcutMigration.migrate()
+            }
+            if intLastVersion < 64 {
+                SnapAreaModel.instance.migrate()
+            }
+            if intLastVersion < 72 {
+                if #available(macOS 13, *) {
+                    SMLoginItemSetEnabled(AppDelegate.launcherAppId as CFString, false)
+                }
             }
         }
         
@@ -75,19 +86,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.applicationToggle.reloadFromDefaults()
             self.shortcutManager.reloadFromDefaults()
             self.snappingManager.reloadFromDefaults()
-            self.initializeTodo()
+            self.initializeTodo(false)
         })
         
         Notification.Name.todoMenuToggled.onPost(using: { _ in
-            self.showHideTodoMenuItems()
-            if Defaults.todo.userEnabled {
-                TodoManager.registerReflowShortcut()
-            }
+            self.initializeTodo(false)
         })
     }
     
+    func applicationWillBecomeActive(_ notification: Notification) {
+        Notification.Name.appWillBecomeActive.post()
+    }
+    
     func checkAutoCheckForUpdates() {
-        SUUpdater.shared()?.automaticallyChecksForUpdates = Defaults.SUEnableAutomaticChecks.enabled
+        Self.updaterController.updater.automaticallyChecksForUpdates = Defaults.SUEnableAutomaticChecks.enabled
     }
     
     func accessibilityTrusted() {
@@ -96,6 +108,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.shortcutManager = ShortcutManager(windowManager: windowManager)
         self.applicationToggle = ApplicationToggle(shortcutManager: shortcutManager)
         self.snappingManager = SnappingManager(applicationToggle: applicationToggle)
+        self.titleBarManager = TitleBarManager()
         self.initializeTodo()
         checkForProblematicApps()
     }
@@ -124,7 +137,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard !Defaults.windowSnapping.userDisabled, !Defaults.notifiedOfProblemApps.enabled else { return }
         
         let problemBundleIds: [String] = [
-            "com.mathworks.matlab", "com.live2d.cubism.CECubismEditorApp"
+            "com.mathworks.matlab", "com.live2d.cubism.CECubismEditorApp", "com.aquafold.datastudio.DataStudio"
         ]
         
         // these apps are java based with dynamic bundleIds
@@ -219,7 +232,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @IBAction func checkForUpdates(_ sender: Any) {
-        SUUpdater.shared()?.checkForUpdates(sender)
+        Self.updaterController.checkForUpdates(sender)
     }
     
     @IBAction func authorizeAccessibility(_ sender: Any) {
@@ -227,24 +240,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkLaunchOnLogin() {
-        let running = NSWorkspace.shared.runningApplications
-        let isRunning = !running.filter({$0.bundleIdentifier == AppDelegate.launcherAppId}).isEmpty
-        if isRunning {
-            let killNotification = Notification.Name("killLauncher")
-            DistributedNotificationCenter.default().post(name: killNotification, object: Bundle.main.bundleIdentifier!)
-        }
-        if !Defaults.SUHasLaunchedBefore {
-            Defaults.launchOnLogin.enabled = true
-        }
-        
-        // Even if we are already set up to launch on login, setting it again since macOS can be buggy with this type of launch on login.
-        if Defaults.launchOnLogin.enabled {
-            let smLoginSuccess = SMLoginItemSetEnabled(AppDelegate.launcherAppId as CFString, true)
-            if !smLoginSuccess {
-                if #available(OSX 10.12, *) {
-                    os_log("Unable to enable launch at login. Attempting one more time.", type: .info)
+        if #available(macOS 13.0, *) {
+            if Defaults.launchOnLogin.enabled, !LaunchOnLogin.isEnabled {
+                LaunchOnLogin.isEnabled = true
+            }
+        } else {
+            let running = NSWorkspace.shared.runningApplications
+            let isRunning = !running.filter({$0.bundleIdentifier == AppDelegate.launcherAppId}).isEmpty
+            if isRunning {
+                let killNotification = Notification.Name("killLauncher")
+                DistributedNotificationCenter.default().post(name: killNotification, object: Bundle.main.bundleIdentifier!)
+            }
+            if !Defaults.SUHasLaunchedBefore {
+                Defaults.launchOnLogin.enabled = true
+            }
+            
+            // Even if we are already set up to launch on login, setting it again since macOS can be buggy with this type of launch on login.
+            if Defaults.launchOnLogin.enabled {
+                let smLoginSuccess = SMLoginItemSetEnabled(AppDelegate.launcherAppId as CFString, true)
+                if !smLoginSuccess {
+                    if #available(OSX 10.12, *) {
+                        os_log("Unable to enable launch at login. Attempting one more time.", type: .info)
+                    }
+                    SMLoginItemSetEnabled(AppDelegate.launcherAppId as CFString, true)
                 }
-                SMLoginItemSetEnabled(AppDelegate.launcherAppId as CFString, true)
             }
         }
     }
@@ -278,7 +297,7 @@ extension AppDelegate: NSMenuDelegate {
     }
     
     private func updateWindowActionMenuItems(menu: NSMenu) {
-        let frontmostWindow = AccessibilityElement.frontmostWindow()
+        let frontmostWindow = AccessibilityElement.getFrontWindowElement()
         let screenCount = NSScreen.screens.count
         let isPortrait = NSScreen.main?.frame.isLandscape == false
 
@@ -379,17 +398,15 @@ extension AppDelegate: NSMenuDelegate {
 
 // todo mode
 extension AppDelegate {
-    func initializeTodo() {
+    func initializeTodo(_ bringToFront: Bool = true) {
         self.showHideTodoMenuItems()
-        guard Defaults.todo.userEnabled else { return }
-        TodoManager.registerReflowShortcut()
-        if Defaults.todoMode.enabled {
-            TodoManager.moveAll()
-        }
+        TodoManager.registerUnregisterToggleShortcut()
+        TodoManager.registerUnregisterReflowShortcut()
+        TodoManager.moveAllIfNeeded(bringToFront)
     }
 
     enum TodoItem {
-        case mode, app, reflow, separator
+        case mode, app, reflow, separator, window
 
         var tag: Int {
             switch self {
@@ -397,10 +414,11 @@ extension AppDelegate {
             case .app: return 102
             case .reflow: return 103
             case .separator: return 104
+            case .window: return 105
             }
         }
         
-        static let tags = [101, 102, 103, 104]
+        static let tags = [101, 102, 103, 104, 105]
     }
 
     private func addTodoModeMenuItems(startingIndex: Int) {
@@ -409,6 +427,7 @@ extension AppDelegate {
         let todoModeItemTitle = NSLocalizedString("Enable Todo Mode", tableName: "Main", value: "", comment: "")
         let todoModeMenuItem = NSMenuItem(title: todoModeItemTitle, action: #selector(toggleTodoMode), keyEquivalent: "")
         todoModeMenuItem.tag = TodoItem.mode.tag
+        todoModeMenuItem.target = self
         mainStatusMenu.insertItem(todoModeMenuItem, at: menuIndex)
         menuIndex += 1
 
@@ -418,6 +437,12 @@ extension AppDelegate {
         mainStatusMenu.insertItem(todoAppMenuItem, at: menuIndex)
         menuIndex += 1
 
+        let todoWindowItemTitle = NSLocalizedString("Use as Todo Window", tableName: "Main", value: "", comment: "")
+        let todoWindowMenuItem = NSMenuItem(title: todoWindowItemTitle, action: #selector(setTodoWindow), keyEquivalent: "")
+        todoWindowMenuItem.tag = TodoItem.window.tag
+        mainStatusMenu.insertItem(todoWindowMenuItem, at: menuIndex)
+        menuIndex += 1
+        
         let todoReflowItemTitle = NSLocalizedString("Reflow Todo", tableName: "Main", value: "", comment: "")
         let todoReflowItem = NSMenuItem(title: todoReflowItemTitle, action: #selector(todoReflow), keyEquivalent: "")
         todoReflowItem.tag = TodoItem.reflow.tag
@@ -440,27 +465,30 @@ extension AppDelegate {
     }
 
     @objc func toggleTodoMode(_ sender: NSMenuItem) {
-        if sender.state == .off {
-            Defaults.todoMode.enabled = true
-            TodoManager.moveAll()
-        } else {
-            Defaults.todoMode.enabled = false
-        }
+        let enabled = sender.state == .off
+        TodoManager.setTodoMode(enabled)
     }
 
     @objc func setTodoApp(_ sender: NSMenuItem) {
         applicationToggle.setTodoApp()
+        TodoManager.moveAllIfNeeded()
     }
 
     @objc func todoReflow(_ sender: NSMenuItem) {
         TodoManager.moveAll()
+    }
+    
+    @objc func setTodoWindow(_ sender: NSMenuItem) {
+        TodoManager.resetTodoWindow()
+        TodoManager.moveAllIfNeeded()
     }
 
     private func updateTodoModeMenuItems(menu: NSMenu) {
         guard Defaults.todo.userEnabled,
               let todoAppMenuItem = menu.item(withTag: TodoItem.app.tag),
               let todoModeMenuItem = menu.item(withTag: TodoItem.mode.tag),
-              let todoReflowMenuItem = menu.item(withTag: TodoItem.reflow.tag)
+              let todoReflowMenuItem = menu.item(withTag: TodoItem.reflow.tag),
+              let todoWindowMenuItem = menu.item(withTag: TodoItem.window.tag)
         else {
             return
         }
@@ -477,12 +505,22 @@ extension AppDelegate {
         }
 
         todoModeMenuItem.state = Defaults.todoMode.enabled ? .on : .off
+        
+        if let fullKeyEquivalent = TodoManager.getToggleKeyDisplay(),
+            let keyEquivalent = fullKeyEquivalent.0?.lowercased() {
+            todoModeMenuItem.keyEquivalent = keyEquivalent
+            todoModeMenuItem.keyEquivalentModifierMask = fullKeyEquivalent.1
+        }
 
         if let fullKeyEquivalent = TodoManager.getReflowKeyDisplay(),
             let keyEquivalent = fullKeyEquivalent.0?.lowercased() {
             todoReflowMenuItem.keyEquivalent = keyEquivalent
             todoReflowMenuItem.keyEquivalentModifierMask = fullKeyEquivalent.1
         }
+        
+        todoReflowMenuItem.isEnabled = Defaults.todoMode.enabled
+        
+        todoWindowMenuItem.isHidden = !applicationToggle.todoAppIsActive() || TodoManager.isTodoWindowFront()
     }
 }
 
@@ -492,4 +530,20 @@ extension AppDelegate: NSWindowDelegate {
         NSApp.abortModal()
     }
     
+}
+
+extension AppDelegate {
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true) else { continue }
+            if components.host == "execute-action" && components.path.isEmpty {
+                guard let name = (components.queryItems?.first { $0.name == "name" })?.value else { continue }
+                if let action = (WindowAction.active.first { urlName($0.name) == name }) { action.postUrl() }
+            }
+        }
+    }
+    
+    private func urlName(_ name: String) -> String {
+        return name.map { $0.isUppercase ? "-" + $0.lowercased() : String($0) }.joined()
+    }
 }

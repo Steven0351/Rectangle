@@ -19,6 +19,16 @@ extension Defaults {
                 shortcuts[action.name] = Shortcut(masShortcut: masShortcut)
             }
         }
+        for defaultsKey in TodoManager.defaultsKeys {
+            guard
+                let shortcutDict = UserDefaults.standard.dictionary(forKey: defaultsKey),
+                let dictTransformer = ValueTransformer(forName: NSValueTransformerName(rawValue: MASDictionaryTransformerName)),
+                let shortcut = dictTransformer.transformedValue(shortcutDict) as? MASShortcut
+            else {
+                continue
+            }
+            shortcuts[defaultsKey] = Shortcut(masShortcut: shortcut)
+        }
         
         var codableDefaults = [String: CodableDefault]()
         for exportableDefault in Defaults.array {
@@ -37,7 +47,6 @@ extension Defaults {
         }
         if let encodedJson = try? encoder.encode(config) {
             if let jsonString = String(data: encodedJson, encoding: .utf8) {
-                print(jsonString)
                 return jsonString
             }
         }
@@ -68,8 +77,50 @@ extension Defaults {
                 UserDefaults.standard.setValue(dictValue, forKey: action.name)
             }
         }
+        for defaultsKey in TodoManager.defaultsKeys {
+            if let shortcut = config.shortcuts[defaultsKey]?.toMASSHortcut() {
+                let dictValue = dictTransformer.reverseTransformedValue(shortcut)
+                UserDefaults.standard.setValue(dictValue, forKey: defaultsKey)
+            }
+        }
         
         Notification.Name.configImported.post()
+    }
+    
+    static func loadFromSupportDir() {
+        if let rectangleSupportURL = getSupportDir()?
+            .appendingPathComponent("Rectangle", isDirectory: true) {
+            
+            let configURL = rectangleSupportURL.appendingPathComponent("RectangleConfig.json")
+                        
+            let exists = try? configURL.checkResourceIsReachable()
+            if exists == true {
+                load(fileUrl: configURL)
+                do {
+                    let newFilename = "RectangleConfig\(timestamp()).json"
+                    
+                    try FileManager.default.moveItem(atPath: configURL.path, toPath: rectangleSupportURL.appendingPathComponent(newFilename).path)
+                } catch {
+                    do {
+                        try FileManager.default.removeItem(at: configURL)
+                    } catch {
+                        AlertUtil.oneButtonAlert(question: "Error after loading from Support Dir", text: "Unable to rename/remove RectangleConfig.json from \(rectangleSupportURL) after loading.")
+                    }
+                }
+            }
+        }
+    }
+    
+    private static func getSupportDir() -> URL? {
+        let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        return paths.isEmpty ? nil : paths[0]
+    }
+    
+    private static func timestamp() -> String {
+        let date = Date()
+        let formatter = DateFormatter()
+        formatter.dateFormat = "y-MM-dd_H-mm-ss-SSSS"
+        return formatter.string(from: date)
     }
 }
 

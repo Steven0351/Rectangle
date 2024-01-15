@@ -57,6 +57,9 @@ class ApplicationToggle: NSObject {
         if !self.shortcutsDisabled {
             self.shortcutsDisabled = true
             self.shortcutManager.unbindShortcuts()
+            if !Defaults.ignoreDragSnapToo.userDisabled {
+                Notification.Name.windowSnapping.post(object: false)
+            }
         }
     }
     
@@ -64,6 +67,9 @@ class ApplicationToggle: NSObject {
         if self.shortcutsDisabled {
             self.shortcutsDisabled = false
             self.shortcutManager.bindShortcuts()
+            if !Defaults.ignoreDragSnapToo.userDisabled {
+                Notification.Name.windowSnapping.post(object: true)
+            }
         }
     }
 
@@ -104,6 +110,11 @@ class ApplicationToggle: NSObject {
                 Notification.Name.frontAppChanged.post()
             } else {
                 enableShortcuts()
+            }
+            if Defaults.enhancedUI.value == .frontmostDisable {
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) {
+                    AccessibilityElement.getFrontApplicationElement()?.enhancedUserInterface = false
+                }
             }
         }
     }

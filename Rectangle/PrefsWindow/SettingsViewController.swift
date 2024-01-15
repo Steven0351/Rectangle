@@ -15,36 +15,39 @@ class SettingsViewController: NSViewController {
         
     @IBOutlet weak var launchOnLoginCheckbox: NSButton!
     @IBOutlet weak var versionLabel: NSTextField!
-    @IBOutlet weak var windowSnappingCheckbox: NSButton!
     @IBOutlet weak var hideMenuBarIconCheckbox: NSButton!
     @IBOutlet weak var subsequentExecutionPopUpButton: NSPopUpButton!
     @IBOutlet weak var allowAnyShortcutCheckbox: NSButton!
     @IBOutlet weak var checkForUpdatesAutomaticallyCheckbox: NSButton!
     @IBOutlet weak var checkForUpdatesButton: NSButton!
-    @IBOutlet weak var unsnapRestoreButton: NSButton!
     @IBOutlet weak var gapSlider: NSSlider!
     @IBOutlet weak var gapLabel: NSTextField!
     @IBOutlet weak var cursorAcrossCheckbox: NSButton!
+    @IBOutlet weak var doubleClickTitleBarCheckbox: NSButton!
     @IBOutlet weak var todoCheckbox: NSButton!
+    @IBOutlet weak var todoView: NSStackView!
     @IBOutlet weak var todoAppWidthField: AutoSaveFloatField!
+    @IBOutlet weak var todoAppSidePopUpButton: NSPopUpButton!
+    @IBOutlet weak var toggleTodoShortcutView: MASShortcutView!
     @IBOutlet weak var reflowTodoShortcutView: MASShortcutView!
+    @IBOutlet weak var stageView: NSStackView!
+    @IBOutlet weak var stageSlider: NSSlider!
+    @IBOutlet weak var stageLabel: NSTextField!
     
     private var aboutTodoWindowController: NSWindowController?
     
     @IBAction func toggleLaunchOnLogin(_ sender: NSButton) {
         let newSetting: Bool = sender.state == .on
-        let smLoginSuccess = SMLoginItemSetEnabled(AppDelegate.launcherAppId as CFString, newSetting)
-        if !smLoginSuccess {
-            Logger.log("Unable to set launch at login preference. Attempting one more time.")
-            SMLoginItemSetEnabled(AppDelegate.launcherAppId as CFString, newSetting)
+        if #available(macOS 13, *) {
+            LaunchOnLogin.isEnabled = newSetting
+        } else {
+            let smLoginSuccess = SMLoginItemSetEnabled(AppDelegate.launcherAppId as CFString, newSetting)
+            if !smLoginSuccess {
+                Logger.log("Unable to set launch at login preference. Attempting one more time.")
+                SMLoginItemSetEnabled(AppDelegate.launcherAppId as CFString, newSetting)
+            }            
         }
         Defaults.launchOnLogin.enabled = newSetting
-    }
-    
-    @IBAction func toggleWindowSnapping(_ sender: NSButton) {
-        let newSetting: Bool = sender.state == .on
-        Defaults.windowSnapping.enabled = newSetting
-        Notification.Name.windowSnapping.post(object: newSetting)
     }
     
     @IBAction func toggleHideMenuBarIcon(_ sender: NSButton) {
@@ -74,11 +77,6 @@ class SettingsViewController: NSViewController {
         }
     }
     
-    @IBAction func toggleUnsnapRestore(_ sender: NSButton) {
-        let newSetting: Bool = sender.state == .on
-        Defaults.unsnapRestore.enabled = newSetting
-    }
-    
     @IBAction func toggleCursorMove(_ sender: NSButton) {
         let newSetting: Bool = sender.state == .on
         Defaults.moveCursorAcrossDisplays.enabled = newSetting
@@ -91,12 +89,41 @@ class SettingsViewController: NSViewController {
     }
     
     @IBAction func checkForUpdates(_ sender: Any) {
-        SUUpdater.shared()?.checkForUpdates(sender)
+        AppDelegate.updaterController.checkForUpdates(sender)
+    }
+    
+    @IBAction func toggleDoubleClickTitleBar(_ sender: NSButton) {
+        let newSetting: Bool = sender.state == .on
+        if newSetting && !TitleBarManager.systemSettingDisabled {
+            
+            var openSystemSettingsButtonName = NSLocalizedString("iWV-c2-BJD.title", tableName: "Main", value: "Open System Preferences", comment: "")
+            
+            if #available(macOS 13, *) {
+                openSystemSettingsButtonName = NSLocalizedString(
+                    "Open System Settings", tableName: "Main", value: "", comment: "")
+            }
+
+            let conflictTitleText = NSLocalizedString(
+                "Conflict with system setting", tableName: "Main", value: "", comment: "")
+            let conflictDescriptionText = NSLocalizedString(
+                "To let Rectangle manage the title bar double click functionality, you need to disable the corresponding macOS setting.", tableName: "Main", value: "", comment: "")
+
+            
+            let closeText = NSLocalizedString("DVo-aG-piG.title", tableName: "Main", value: "Close", comment: "")
+            
+            let response = AlertUtil.twoButtonAlert(question: conflictTitleText, text: conflictDescriptionText, confirmText: openSystemSettingsButtonName, cancelText: closeText)
+            if response == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.dock")!)
+            }
+        }
+        Defaults.doubleClickTitleBar.value = (newSetting ? WindowAction.maximize.rawValue : -1) + 1
+        Notification.Name.windowTitleBar.post()
     }
     
     @IBAction func toggleTodoMode(_ sender: NSButton) {
         let newSetting: Bool = sender.state == .on
         Defaults.todo.enabled = newSetting
+        showHideTodoModeSettings()
         Notification.Name.todoMenuToggled.post()
     }
     
@@ -108,7 +135,32 @@ class SettingsViewController: NSViewController {
         aboutTodoWindowController?.showWindow(self)
     }
     
+    @IBAction func setTodoAppSide(_ sender: NSPopUpButton) {
+        let tag = sender.selectedTag()
+        guard let side = TodoSidebarSide(rawValue: tag) else {
+            Logger.log("Expected a pop up button to have a selected item with a valid tag matching a value of TodoSidebarSide. Got: \(String(describing: tag))")
+            return
+        }
+
+        Defaults.todoSidebarSide.value = side
+        
+        TodoManager.moveAllIfNeeded(false)
+    }
+    
+    @IBAction func stageSliderChanged(_ sender: NSSlider) {
+        stageLabel.stringValue = "\(sender.intValue) px"
+        if let event = NSApp.currentEvent {
+            if event.type == .leftMouseUp || event.type == .keyDown {
+                let value: Float = sender.floatValue == 0 ? -1 : sender.floatValue
+                if value != Defaults.stageSize.value {
+                    Defaults.stageSize.value = value
+                }
+            }
+        }
+    }
+    
     @IBAction func restoreDefaults(_ sender: Any) {
+        // Ask user if they want to restore to Rectangle or Spectacle defaults
         let currentDefaults = Defaults.alternateDefaultShortcuts.enabled ? "Rectangle" : "Spectacle"
         let defaultShortcutsTitle = NSLocalizedString("Default Shortcuts", tableName: "Main", value: "", comment: "")
         let currentlyUsingText = NSLocalizedString("Currently using: ", tableName: "Main", value: "", comment: "")
@@ -116,12 +168,18 @@ class SettingsViewController: NSViewController {
         let response = AlertUtil.threeButtonAlert(question: defaultShortcutsTitle, text: currentlyUsingText + currentDefaults, buttonOneText: "Rectangle", buttonTwoText: "Spectacle", buttonThreeText: cancelText)
         if response == .alertThirdButtonReturn { return }
 
+        //  Restore default shortcuts
         WindowAction.active.forEach { UserDefaults.standard.removeObject(forKey: $0.name) }
         let rectangleDefaults = response == .alertFirstButtonReturn
         if rectangleDefaults != Defaults.alternateDefaultShortcuts.enabled {
             Defaults.alternateDefaultShortcuts.enabled = rectangleDefaults
             Notification.Name.changeDefaults.post()
         }
+        
+        // Restore snap areas
+        Defaults.portraitSnapAreas.typedValue = nil
+        Defaults.landscapeSnapAreas.typedValue = nil
+        Notification.Name.defaultSnapAreas.post()
     }
     
     @IBAction func exportConfig(_ sender: NSButton) {
@@ -157,9 +215,7 @@ class SettingsViewController: NSViewController {
     override func awakeFromNib() {
         initializeToggles()
 
-        if let updater = SUUpdater.shared() {
-            checkForUpdatesAutomaticallyCheckbox.bind(.value, to: updater, withKeyPath: "automaticallyChecksForUpdates", options: nil)
-        }
+        checkForUpdatesAutomaticallyCheckbox.bind(.value, to: AppDelegate.updaterController.updater, withKeyPath: "automaticallyChecksForUpdates", options: nil)
         
         let appVersionString: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as! String
         let buildString: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as! String
@@ -174,6 +230,10 @@ class SettingsViewController: NSViewController {
             self.initializeTodoModeSettings()
             self.initializeToggles()
         })
+        
+        Notification.Name.menuBarIconHidden.onPost(using: {_ in
+            self.hideMenuBarIconCheckbox.state = .on
+        })
     }
     
     func initializeTodoModeSettings() {
@@ -181,7 +241,19 @@ class SettingsViewController: NSViewController {
         todoAppWidthField.stringValue = String(Defaults.todoSidebarWidth.value)
         todoAppWidthField.delegate = self
         todoAppWidthField.defaults = Defaults.todoSidebarWidth
-        reflowTodoShortcutView.setAssociatedUserDefaultsKey(TodoManager.defaultsKey, withTransformerName: MASDictionaryTransformerName)
+        todoAppWidthField.defaultsSetAction = {
+            TodoManager.moveAllIfNeeded(false)
+        }
+        todoAppSidePopUpButton.selectItem(withTag: Defaults.todoSidebarSide.value.rawValue)
+        TodoManager.initToggleShortcut()
+        TodoManager.initReflowShortcut()
+        toggleTodoShortcutView.setAssociatedUserDefaultsKey(TodoManager.toggleDefaultsKey, withTransformerName: MASDictionaryTransformerName)
+        reflowTodoShortcutView.setAssociatedUserDefaultsKey(TodoManager.reflowDefaultsKey, withTransformerName: MASDictionaryTransformerName)
+        showHideTodoModeSettings()
+    }
+    
+    private func showHideTodoModeSettings() {
+        todoView.isHidden = !Defaults.todo.userEnabled
     }
     
     func initializeToggles() {
@@ -194,16 +266,22 @@ class SettingsViewController: NSViewController {
         subsequentExecutionPopUpButton.selectItem(withTag: Defaults.subsequentExecutionMode.value.rawValue)
         
         allowAnyShortcutCheckbox.state = Defaults.allowAnyShortcut.enabled ? .on : .off
-        
-        windowSnappingCheckbox.state = Defaults.windowSnapping.userDisabled ? .off : .on
-        
+                
         gapSlider.intValue = Int32(Defaults.gapSize.value)
         gapLabel.stringValue = "\(gapSlider.intValue) px"
         gapSlider.isContinuous = true
         
-        unsnapRestoreButton.state = Defaults.unsnapRestore.userDisabled ? .off : .on
-        
         cursorAcrossCheckbox.state = Defaults.moveCursorAcrossDisplays.userEnabled ? .on : .off
+        
+        doubleClickTitleBarCheckbox.state = WindowAction(rawValue: Defaults.doubleClickTitleBar.value - 1) != nil ? .on : .off
+
+        if StageUtil.stageCapable {
+            stageSlider.intValue = Int32(Defaults.stageSize.value)
+            stageSlider.isContinuous = true
+            stageLabel.stringValue = "\(stageSlider.intValue) px"
+        } else {
+            stageView.isHidden = true
+        }
     }
 
 }
@@ -226,10 +304,12 @@ extension SettingsViewController: NSTextFieldDelegate {
         
         Debounce<Float>.input(sender.floatValue, comparedAgainst: sender.floatValue) { floatValue in
             defaults.value = floatValue
+            sender.defaultsSetAction?()
         }
     }
 }
 
 class AutoSaveFloatField: NSTextField {
     var defaults: FloatDefault?
+    var defaultsSetAction: (() -> Void)?
 }

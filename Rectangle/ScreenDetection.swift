@@ -23,7 +23,7 @@ class ScreenDetection {
         }
         
         let screensOrdered = order(screens: screens)
-        guard let sourceScreen: NSScreen = screenContaining(frontmostWindowElement?.rectOfElement() ?? CGRect.zero, screens: screensOrdered) else {
+        guard let sourceScreen: NSScreen = screenContaining(frontmostWindowElement?.frame ?? CGRect.zero, screens: screensOrdered) else {
             let adjacentScreens = AdjacentScreens(prev: firstScreen, next: firstScreen)
             return UsableScreens(currentScreen: firstScreen, adjacentScreens: adjacentScreens, numScreens: screens.count)
         }
@@ -33,12 +33,12 @@ class ScreenDetection {
         return UsableScreens(currentScreen: sourceScreen, adjacentScreens: adjacentScreens, numScreens: screens.count)
     }
 
-    private func screenContaining(_ rect: CGRect, screens: [NSScreen]) -> NSScreen? {
+    func screenContaining(_ rect: CGRect, screens: [NSScreen]) -> NSScreen? {
         var result: NSScreen? = NSScreen.main
         var largestPercentageOfRectWithinFrameOfScreen: CGFloat = 0.0
         for currentScreen in screens {
             let currentFrameOfScreen = NSRectToCGRect(currentScreen.frame)
-            let normalizedRect: CGRect = AccessibilityElement.normalizeCoordinatesOf(rect)
+            let normalizedRect: CGRect = rect.screenFlipped
             if currentFrameOfScreen.contains(normalizedRect) {
                 result = currentScreen
                 break
@@ -109,14 +109,12 @@ struct UsableScreens {
     let currentScreen: NSScreen
     let adjacentScreens: AdjacentScreens?
     let frameOfCurrentScreen: CGRect
-    var visibleFrameOfCurrentScreen: CGRect
     let numScreens: Int
     
     init(currentScreen: NSScreen, adjacentScreens: AdjacentScreens? = nil, numScreens: Int) {
         self.currentScreen = currentScreen
         self.adjacentScreens = adjacentScreens
         self.frameOfCurrentScreen = currentScreen.frame
-        self.visibleFrameOfCurrentScreen = currentScreen.adjustedVisibleFrame
         self.numScreens = numScreens
     }
 }
@@ -127,29 +125,41 @@ struct AdjacentScreens {
 }
 
 extension NSScreen {
-    var adjustedVisibleFrame: CGRect {
-        get {
-            var newFrame = visibleFrame
 
-            if Defaults.todo.userEnabled, Defaults.todoMode.enabled, TodoManager.todoScreen == self {
-                newFrame.size.width -= Defaults.todoSidebarWidth.cgFloat
+    func adjustedVisibleFrame(_ ignoreTodo: Bool = false, _ ignoreStage: Bool = false) -> CGRect {
+        var newFrame = visibleFrame
+        
+        if !ignoreStage && Defaults.stageSize.value > 0 {
+            if StageUtil.stageCapable && StageUtil.stageEnabled && StageUtil.stageStripShow && StageUtil.isStageStripVisible(self) {
+                let stageSize = Defaults.stageSize.value < 1
+                    ? newFrame.size.width * Defaults.stageSize.cgFloat
+                    : Defaults.stageSize.cgFloat
+                
+                if StageUtil.stageStripPosition == .left {
+                    newFrame.origin.x += stageSize
+                }
+                newFrame.size.width -= stageSize
             }
-            
-            if Defaults.screenEdgeGapsOnMainScreenOnly.enabled, self != NSScreen.screens.first {
-                return newFrame
+        }
+        
+        if !ignoreTodo, Defaults.todo.userEnabled, Defaults.todoMode.enabled, TodoManager.todoScreen == self, TodoManager.hasTodoWindow() {
+            if Defaults.todoSidebarSide.value == .left {
+                newFrame.origin.x += Defaults.todoSidebarWidth.cgFloat
             }
-            
-            newFrame.origin.x += Defaults.screenEdgeGapLeft.cgFloat
-            newFrame.origin.y += Defaults.screenEdgeGapBottom.cgFloat
-            newFrame.size.width -= (Defaults.screenEdgeGapLeft.cgFloat + Defaults.screenEdgeGapRight.cgFloat)
-            newFrame.size.height -= (Defaults.screenEdgeGapTop.cgFloat + Defaults.screenEdgeGapBottom.cgFloat)
-                        
+            newFrame.size.width -= Defaults.todoSidebarWidth.cgFloat
+        }
+
+        if Defaults.screenEdgeGapsOnMainScreenOnly.enabled, self != NSScreen.screens.first {
             return newFrame
         }
-    }
-}
 
-extension NSRect {
-    var isLandscape: Bool { width > height }
+        newFrame.origin.x += Defaults.screenEdgeGapLeft.cgFloat
+        newFrame.origin.y += Defaults.screenEdgeGapBottom.cgFloat
+        newFrame.size.width -= (Defaults.screenEdgeGapLeft.cgFloat + Defaults.screenEdgeGapRight.cgFloat)
+        newFrame.size.height -= (Defaults.screenEdgeGapTop.cgFloat + Defaults.screenEdgeGapBottom.cgFloat)
+
+        return newFrame
+    }
+
 }
 

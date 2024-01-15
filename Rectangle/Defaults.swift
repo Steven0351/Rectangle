@@ -51,6 +51,7 @@ class Defaults {
     static let todoMode = BoolDefault(key: "todoMode")
     static let todoApplication = StringDefault(key: "todoApplication")
     static let todoSidebarWidth = FloatDefault(key: "todoSidebarWidth", defaultValue: 400)
+    static let todoSidebarSide = IntEnumDefault<TodoSidebarSide>(key: "todoSidebarSide", defaultValue: .right)
     static let snapModifiers = IntDefault(key: "snapModifiers")
     static let attemptMatchOnNextPrevDisplay = OptionalBoolDefault(key: "attemptMatchOnNextPrevDisplay")
     static let altThirdCycle = OptionalBoolDefault(key: "altThirdCycle")
@@ -68,7 +69,22 @@ class Defaults {
     static let shortEdgeSnapAreaSize = FloatDefault(key: "shortEdgeSnapAreaSize", defaultValue: 145)
     static let cascadeAllDeltaSize = FloatDefault(key: "cascadeAllDeltaSize", defaultValue: 30)
     static let sixthsSnapArea = OptionalBoolDefault(key: "sixthsSnapArea")
-
+    static let stageSize = FloatDefault(key: "stageSize", defaultValue: 190)
+    static let dragFromStage = OptionalBoolDefault(key: "dragFromStage")
+    static let alwaysAccountForStage = OptionalBoolDefault(key: "alwaysAccountForStage")
+    static let landscapeSnapAreas = JSONDefault<[Directional:SnapAreaConfig]>(key: "landscapeSnapAreas")
+    static let portraitSnapAreas = JSONDefault<[Directional:SnapAreaConfig]>(key: "portraitSnapAreas")
+    static let missionControlDragging = OptionalBoolDefault(key: "missionControlDragging")
+    static let enhancedUI = IntEnumDefault<EnhancedUI>(key: "enhancedUI", defaultValue: .disableEnable)
+    static let footprintAnimationDurationMultiplier = FloatDefault(key: "footprintAnimationDurationMultiplier", defaultValue: 0)
+    static let missionControlDraggingAllowedOffscreenDistance = FloatDefault(key: "missionControlDraggingAllowedOffscreenDistance", defaultValue: 25)
+    static let missionControlDraggingDisallowedDuration = IntDefault(key: "missionControlDraggingDisallowedDuration", defaultValue: 250)
+    static let doubleClickTitleBar = IntDefault(key: "doubleClickTitleBar")
+    static let doubleClickTitleBarRestore = OptionalBoolDefault(key: "doubleClickTitleBarRestore")
+    static let doubleClickTitleBarIgnoredApps = JSONDefault<[String]>(key: "doubleClickTitleBarIgnoredApps")
+    static let ignoreDragSnapToo = OptionalBoolDefault(key: "ignoreDragSnapToo")
+    static let systemWideMouseDown = OptionalBoolDefault(key: "systemWideMouseDown")
+    
     static var array: [Default] = [
         launchOnLogin,
         disabledApps,
@@ -110,6 +126,7 @@ class Defaults {
         todoMode,
         todoApplication,
         todoSidebarWidth,
+        todoSidebarSide,
         snapModifiers,
         attemptMatchOnNextPrevDisplay,
         altThirdCycle,
@@ -126,7 +143,22 @@ class Defaults {
         cornerSnapAreaSize,
         shortEdgeSnapAreaSize,
         cascadeAllDeltaSize,
-        sixthsSnapArea
+        sixthsSnapArea,
+        stageSize,
+        dragFromStage,
+        alwaysAccountForStage,
+        landscapeSnapAreas,
+        portraitSnapAreas,
+        missionControlDragging,
+        enhancedUI,
+        footprintAnimationDurationMultiplier,
+        missionControlDraggingAllowedOffscreenDistance,
+        missionControlDraggingDisallowedDuration,
+        doubleClickTitleBar,
+        doubleClickTitleBarRestore,
+        doubleClickTitleBarIgnoredApps,
+        ignoreDragSnapToo,
+        systemWideMouseDown
     ]
 }
 
@@ -302,9 +334,12 @@ class IntDefault: Default {
         }
     }
     
-    init(key: String) {
+    init(key: String, defaultValue: Int = 0) {
         self.key = key
         value = UserDefaults.standard.integer(forKey: key)
+        if(defaultValue != 0 && value == 0) {
+            value = defaultValue
+        }
         initialized = true
     }
     
@@ -337,6 +372,15 @@ class JSONDefault<T: Codable>: StringDefault {
         typeInitialized = true
     }
     
+    override func load(from codable: CodableDefault) {
+        if value != codable.string {
+            value = codable.string
+            typeInitialized = false
+            loadFromJSON()
+            typeInitialized = true
+        }
+    }
+    
     private func loadFromJSON() {
         guard let jsonString = value else { return }
         let decoder = JSONDecoder()
@@ -353,6 +397,40 @@ class JSONDefault<T: Codable>: StringDefault {
                 value = jsonString
             }
         }
+    }
+}
+
+class IntEnumDefault<E: RawRepresentable>: Default where E.RawValue == Int {
+    public private(set) var key: String
+    private let defaultValue: E
+
+    var _value: E
+    var value: E {
+        set {
+            if newValue != _value {
+                _value = newValue
+                UserDefaults.standard.set(_value.rawValue, forKey: key)
+            }
+        }
+        get { _value }
+    }
+
+    init(key: String, defaultValue: E) {
+        self.key = key
+        self.defaultValue = defaultValue
+        let intValue = UserDefaults.standard.integer(forKey: key)
+        _value = E(rawValue: intValue) ?? defaultValue
+    }
+
+    func load(from codable: CodableDefault) {
+        if let intValue = codable.int, _value.rawValue != intValue {
+            _value = E(rawValue: intValue) ?? defaultValue
+            UserDefaults.standard.set(_value.rawValue, forKey: key)
+        }
+    }
+    
+    func toCodable() -> CodableDefault {
+        CodableDefault(int: value.rawValue)
     }
 }
 

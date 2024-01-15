@@ -16,7 +16,7 @@ fileprivate let ctrl = NSEvent.ModifierFlags.control.rawValue
 fileprivate let shift = NSEvent.ModifierFlags.shift.rawValue
 fileprivate let cmd = NSEvent.ModifierFlags.command.rawValue
 
-enum WindowAction: Int {
+enum WindowAction: Int, Codable {
     case leftHalf = 0,
     rightHalf = 1,
     maximize = 2,
@@ -80,13 +80,17 @@ enum WindowAction: Int {
     bottomCenterRightEighth = 64,
     bottomRightEighth = 65,
     tileAll = 66,
-    cascadeAll = 67
+    cascadeAll = 67,
+    leftTodo = 68,
+    rightTodo = 69,
+    cascadeActiveApp = 70,
+    centerProminently = 71
 
     // Order matters here - it's used in the menu
     static let active = [leftHalf, rightHalf, centerHalf, topHalf, bottomHalf,
                          topLeft, topRight, bottomLeft, bottomRight,
                          firstThird, centerThird, lastThird, firstTwoThirds, lastTwoThirds,
-                         maximize, almostMaximize, maximizeHeight, smaller, larger, center, restore,
+                         maximize, almostMaximize, maximizeHeight, smaller, larger, center, centerProminently, restore,
                          nextDisplay, previousDisplay,
                          moveLeft, moveRight, moveUp, moveDown,
                          firstFourth, secondFourth, thirdFourth, lastFourth, firstThreeFourths, lastThreeFourths,
@@ -98,7 +102,9 @@ enum WindowAction: Int {
                          topLeftThird, topRightThird, bottomLeftThird, bottomRightThird,
                          topLeftEighth, topCenterLeftEighth, topCenterRightEighth, topRightEighth,
                          bottomLeftEighth, bottomCenterLeftEighth, bottomCenterRightEighth, bottomRightEighth,
-                         tileAll, cascadeAll
+                         tileAll, cascadeAll,
+                         leftTodo, rightTodo,
+                         cascadeActiveApp
     ]
 
     func post() {
@@ -109,8 +115,16 @@ enum WindowAction: Int {
         NotificationCenter.default.post(name: notificationName, object: ExecutionParameters(self, source: .menuItem))
     }
 
-    func postSnap(windowElement: AccessibilityElement?, windowId: Int?, screen: NSScreen) {
+    func postSnap(windowElement: AccessibilityElement?, windowId: CGWindowID?, screen: NSScreen) {
         NotificationCenter.default.post(name: notificationName, object: ExecutionParameters(self, updateRestoreRect: false, screen: screen, windowElement: windowElement, windowId: windowId, source: .dragToSnap))
+    }
+    
+    func postUrl() {
+        NotificationCenter.default.post(name: notificationName, object: ExecutionParameters(self, source: .url))
+    }
+    
+    func postTitleBar(windowElement: AccessibilityElement?) {
+        NotificationCenter.default.post(name: notificationName, object: ExecutionParameters(self, windowElement: windowElement, source: .titleBar))
     }
 
     // Determines where separators should be used in the menu
@@ -189,6 +203,10 @@ enum WindowAction: Int {
         case .bottomRightEighth: return "bottomRightEighth"
         case .tileAll: return "tileAll"
         case .cascadeAll: return "cascadeAll"
+        case .leftTodo: return "leftTodo"
+        case .rightTodo: return "rightTodo"
+        case .cascadeActiveApp: return "cascadeActiveApp"
+        case .centerProminently: return "centerProminently"
         }
     }
 
@@ -321,7 +339,9 @@ enum WindowAction: Int {
         case .topLeftEighth, .topCenterLeftEighth, .topCenterRightEighth, .topRightEighth,
                 .bottomLeftEighth, .bottomCenterLeftEighth, .bottomCenterRightEighth, .bottomRightEighth:
             return nil
-        case .specified, .reverseAll, .tileAll, .cascadeAll:
+        case .specified, .reverseAll, .tileAll, .cascadeAll, .leftTodo, .rightTodo, .cascadeActiveApp:
+            return nil
+        case .centerProminently:
             return nil
         }
 
@@ -341,9 +361,24 @@ enum WindowAction: Int {
 
     var resizes: Bool {
         switch self {
-        case .center, .nextDisplay, .previousDisplay: return false
+        case .center, .centerProminently, .nextDisplay, .previousDisplay: return false
         case .moveUp, .moveDown, .moveLeft, .moveRight: return Defaults.resizeOnDirectionalMove.enabled
         default: return true
+        }
+    }
+    
+    var isDragSnappable: Bool {
+        switch self {
+        case .restore, .previousDisplay, .nextDisplay, .moveUp, .moveDown, .moveLeft, .moveRight, .specified, .reverseAll, .tileAll, .cascadeAll, .smaller, .larger, .cascadeActiveApp,
+            // Ninths
+            .topLeftNinth, .topCenterNinth, .topRightNinth, .middleLeftNinth, .middleCenterNinth, .middleRightNinth, .bottomLeftNinth, .bottomCenterNinth, .bottomRightNinth,
+            // Corner thirds
+            .topLeftThird, .topRightThird, .bottomLeftThird, .bottomRightThird,
+            // Eighths
+            .topLeftEighth, .topCenterLeftEighth, .topCenterRightEighth, .topRightEighth, .bottomLeftEighth, .bottomCenterLeftEighth, .bottomCenterRightEighth, .bottomRightEighth:
+            return false
+        default:
+            return true
         }
     }
 
@@ -461,6 +496,10 @@ enum WindowAction: Int {
         case .specified, .reverseAll: return NSImage()
         case .tileAll: return NSImage()
         case .cascadeAll: return NSImage()
+        case .leftTodo: return NSImage()
+        case .rightTodo: return NSImage()
+        case .cascadeActiveApp: return NSImage()
+        case .centerProminently: return NSImage()
         }
     }
 
@@ -490,7 +529,8 @@ enum WindowAction: Int {
             .topLeftNinth, .topCenterNinth, .topRightNinth, .middleLeftNinth, .middleCenterNinth, .middleRightNinth, .bottomLeftNinth, .bottomCenterNinth, .bottomRightNinth,
             .topLeftThird, .topRightThird, .bottomLeftThird, .bottomRightThird,
             .topLeftEighth, .topCenterLeftEighth, .topCenterRightEighth, .topRightEighth,
-            .bottomLeftEighth, .bottomCenterLeftEighth, .bottomCenterRightEighth, .bottomRightEighth:
+            .bottomLeftEighth, .bottomCenterLeftEighth, .bottomCenterRightEighth, .bottomRightEighth,
+            .leftTodo, .rightTodo:
             return .both
         case .moveUp, .moveDown:
             return Defaults.resizeOnDirectionalMove.enabled ? .vertical : .none;
@@ -500,7 +540,7 @@ enum WindowAction: Int {
             return Defaults.applyGapsToMaximize.userDisabled ? .none : .both;
         case .maximizeHeight:
             return Defaults.applyGapsToMaximizeHeight.userDisabled ? .none : .vertical;
-        case .almostMaximize, .previousDisplay, .nextDisplay, .larger, .smaller, .center, .restore, .specified, .reverseAll, .tileAll, .cascadeAll:
+        case .almostMaximize, .previousDisplay, .nextDisplay, .larger, .smaller, .center, .centerProminently, .restore, .specified, .reverseAll, .tileAll, .cascadeAll, .cascadeActiveApp:
             return .none
         }
     }
@@ -601,7 +641,10 @@ enum SubWindowAction {
     bottomCenterRightEighth,
     bottomRightEighth,
         
-    maximize
+    maximize,
+    
+    leftTodo,
+    rightTodo
 
     var gapSharedEdge: Edge {
         switch self {
@@ -671,6 +714,8 @@ enum SubWindowAction {
         case .bottomCenterRightEighth: return  [.right, .left, .top]
         case .bottomRightEighth: return  [.left, .top]
         case .maximize: return .none
+        case .leftTodo: return .right
+        case .rightTodo: return .left
         }
     }
 }
@@ -695,6 +740,6 @@ struct Shortcut: Codable {
     
     func displayString() -> String {
         let masShortcut = toMASSHortcut()
-        return masShortcut.modifierFlagsString + masShortcut.keyCodeString
+        return masShortcut.modifierFlagsString + (masShortcut.keyCodeString ?? "")
     }
 }
